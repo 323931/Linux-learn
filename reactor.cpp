@@ -13,14 +13,86 @@
 #include <sys/select.h>
 #include <poll.h>
 #include <sys/epoll.h>
-#define BUFFER_SIZE 128
+#define BUFFER_SIZE 1024
 struct conn_item{
     int fd;
     char buffer[BUFFER_SIZE];
     int idx;
 };
-
+int epfd =0;
 conn_item conn_items[1024];
+//listenfd 触发 epollin事件时执行accept_cb函数
+//connfd 触发 epollin事件时执行recv_cb函数
+//connfd 触发 epollout事件时执行send_cb函数
+int accept_cb(int fd);
+int recv_cb(int fd);
+int send_cb(int fd);
+int set_event(int fd,int event_type,int flag=0 );
+
+int set_event(int fd,int event_type,int flag ){
+    if(flag==0){
+        struct epoll_event ev;
+        ev.events = event_type ; //|EPOLLET; 
+        ev.data.fd = fd;
+        epoll_ctl(epfd,EPOLL_CTL_MOD,fd,&ev);
+    }else{
+        struct epoll_event ev;
+        ev.events = event_type ; //|EPOLLET; 
+        ev.data.fd = fd;
+        epoll_ctl(epfd,EPOLL_CTL_ADD,fd,&ev);
+    }
+    return 0;
+}
+
+int accept_cb(int fd){
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    int newfd = accept(fd, (struct sockaddr*)&client_addr, &client_len);
+    if (newfd < 0) {    
+        std::cerr << "Accept failed" << std::endl;
+        return -1;   
+    }
+    std::cout<<"accept_cb:接收到新连接"<<newfd<<std::endl;
+    conn_items[newfd].fd = newfd;
+    memset(conn_items[newfd].buffer,0,sizeof(conn_items[newfd].buffer));
+    conn_items[newfd].idx = 0;
+
+    set_event(newfd,EPOLLIN,1); //关注可读事件
+    return newfd;
+}
+
+int recv_cb(int fd){
+    char* buffer =conn_items[fd].buffer;
+    int index = conn_items[fd].idx;
+    //当recv函数返回0，说明对端调用了close函数，连接已经关闭
+    int len = recv(fd, buffer+index, BUFFER_SIZE-index, 0); //
+    if(len == 0){
+        //注意这里要把事件处理完后断开连接，并且从rdfs中移除
+        close(fd);
+        epoll_ctl(epfd,EPOLL_CTL_DEL,fd,nullptr); //从epoll中移除
+        std::cout<<"recv_cb:连接关闭："<< fd <<std::endl;
+        return -1;
+    }else{
+        conn_items[fd].idx += len;
+        std::cout << "recv_cb:Received from "<< fd <<": " << conn_items[fd].buffer << std::endl;
+    }
+
+    set_event(fd,EPOLLOUT,0); //修改为关注可写事件
+    return len;
+}
+
+int send_cb(int fd){
+    char* buffer =conn_items[fd].buffer;
+    int index = conn_items[fd].idx;
+    send(fd, buffer, index, 0); // Echo back the received data
+    std::cout << "send_cb:Sent to "<< fd <<": " << conn_items[fd].buffer << std::endl;
+    //发送完后，清空缓冲区
+    memset(conn_items[fd].buffer,0,sizeof(conn_items[fd].buffer));
+    conn_items[fd].idx =0;
+
+    set_event(fd,EPOLLIN,0); //修改为关注可读事件
+    return 0;
+}
 
 
 void *client_thread(void* clientfd){
@@ -64,18 +136,7 @@ int main(){
         std::cerr << "Accept failed" << std::endl;
         return -1;
     }
-
-
-    
-    
     std::cout<<newsockfd<<std::endl;*/
-
-
-
-
-
-
-
 #if 0
     char buffer[128];
     recv(newsockfd, buffer, sizeof(buffer), 0); // Receive data into buffer
@@ -199,53 +260,24 @@ int main(){
         }
     }
 #else
-    int epfd =  epoll_create(1);   
+    //reactor epoll
+    epfd =  epoll_create(1);   
     //参数 size : 历史遗留问题，一开始需要确定 蜂巢盒子的大小 ，但是计算机里面完全可以实现一个链表的效果，无需一开始指定，所以
     //我们只要大于0就行参数
-    struct epoll_event ev;
-    ev.events = EPOLLIN; //关注可读事件
-    ev.data.fd = sockfd;
-    epoll_ctl(epfd,EPOLL_CTL_ADD,sockfd,&ev); //把监听socket添加到epoll中
-
+    set_event(sockfd,EPOLLIN,1);
     epoll_event events[1024];
-
     while(1){
         int nready = epoll_wait(epfd,events,1024,-1);
         int i =0;
         for(i=0;i<nready;i++){
             int connfd = events[i].data.fd;
             if(connfd == sockfd){
-                struct sockaddr_in client_addr;
-                socklen_t client_len = sizeof(client_addr);
-                int newsockfd = accept(sockfd, (struct sockaddr*)&client_addr, &client_len);
-                if (newsockfd < 0) {    
-                    std::cerr << "Accept failed" << std::endl;
-                    continue;   
-                }
-                std::cout<<"接受到了新连接："<< newsockfd <<std::endl;
-                conn_items[newsockfd].fd = newsockfd;
-                memset(conn_items[newsockfd].buffer,0,sizeof(conn_items[newsockfd].buffer));
-                conn_items[newsockfd].idx = 0;
-
-                struct epoll_event ev;
-                ev.events = EPOLLIN ; //|EPOLLET; //关注可读事件
-                ev.data.fd = newsockfd;
-                epoll_ctl(epfd,EPOLL_CTL_ADD,newsockfd,&ev); //把新的连接添加到epoll中
+                //有新的连接到来
+                int newfd= accept_cb(sockfd);
             }else if(events[i].events & EPOLLIN){
-                char* buffer = conn_items[connfd].buffer;
-                int index = conn_items[connfd].idx;
-                //当recv函数返回0，说明对端调用了close函数，连接已经关闭
-                int len = recv(connfd, buffer+index, BUFFER_SIZE-index, 0); // Receive data into buffer
-                if(len <= 0){
-                    //注意这里要把事件处理完后断开连接，并且从rdfs中移除
-                    close(connfd);
-                    epoll_ctl(epfd,EPOLL_CTL_DEL,connfd,nullptr); //从epoll中移除
-                    std::cout<<"连接关闭："<< connfd <<std::endl;
-                }else{
-                    conn_items[connfd].idx += len;
-                    send(connfd, buffer+index,len, 0); // Echo back the received data
-                    std::cout << "Received from "<< connfd <<": " << buffer+index << std::endl;
-                }
+                recv_cb(connfd);
+            }else if(events[i].events & EPOLLOUT){
+                send_cb(connfd);
             }
         }
     }
