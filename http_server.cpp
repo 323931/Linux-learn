@@ -17,10 +17,11 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/sendfile.h>
+#include <sys/time.h>
 #define BUFFER_SIZE 1024
 #define ENABLE_HTTP_RESPONSE 1
 #define ROOT  "/srv/samba/share/cpp"
-
+#define TIME_DIFF(tv1,tv2)   ((tv1.tv_sec - tv2.tv_sec)*1000 + (tv1.tv_usec - tv2.tv_usec)/1000)
 typedef int (*CALL_BACK)(int fd);
 
 struct conn_item{
@@ -84,9 +85,9 @@ int http_response(connection_t* conn){
 }
 #endif
 
-
+timeval tv_start;
 int epfd =0;
-conn_item conn_items[1024];
+conn_item conn_items[1048576];
 //listenfd 触发 epollin事件时执行accept_cb函数
 //connfd 触发 epollin事件时执行recv_cb函数
 //connfd 触发 epollout事件时执行send_cb函数
@@ -128,6 +129,14 @@ int accept_cb(int fd){
     conn_items[newfd].send_callback = send_cb;
 
     set_event(newfd,EPOLLIN,1); //关注可读事件
+
+    if(newfd % 1000 == 999){
+        struct timeval tv_cur;
+        gettimeofday(&tv_cur,nullptr);
+        int time_used = TIME_DIFF(tv_cur,tv_start);
+        memcpy(&tv_start,&tv_cur,sizeof(tv_cur));
+        std::cout << time_used << " ms to accept 1000 connections" << std::endl;
+    }
     return newfd;
 }
 
@@ -144,14 +153,21 @@ int recv_cb(int fd){
         return -1;
     }else{
         conn_items[fd].rlen += len;
-        std::cout << "recv_cb:Received from "<< fd <<": " << conn_items[fd].rbuffer << std::endl;
+        std::cout << "recv_cb:Received from "<< fd <<": " << conn_items[fd].rbuffer+index << std::endl;
     }
     //把收到的数据拷贝到发送缓冲区
     // memcpy(conn_items[fd].wbuffer,conn_items[fd].rbuffer,conn_items[fd].rlen);
     // conn_items[fd].wlen = conn_items[fd].rlen;
     //清空接收缓冲区
-#if 1
+#if 0
     http_response(&conn_items[fd]);
+#elif 1
+    //把收到的数据拷贝到发送缓冲区
+    memcpy(conn_items[fd].wbuffer,conn_items[fd].rbuffer,conn_items[fd].rlen);
+    //!!!!!!这里就是直接把要发送的数据长度设置为接收的数据长度
+    //然后逻辑上将接收缓存区情况，因为rlen为0，下次新接数据就是直接覆盖原本数据！！
+    conn_items[fd].wlen = conn_items[fd].rlen;    
+    conn_items[fd].rlen -= conn_items[fd].rlen;
 #endif
     set_event(fd,EPOLLOUT,0); //修改为关注可写事件
     return len;
@@ -188,14 +204,15 @@ void *client_thread(void* clientfd){
     return nullptr;     
 }
 
-
-int main(){
+int init_server(unsigned short port);
+int init_server(unsigned short port){
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(2048);
+    //开放服务器多端口
+    server_addr.sin_port = htons(port);
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
@@ -204,9 +221,26 @@ int main(){
     }
 
     listen(sockfd, 5);
-    conn_items[sockfd].fd = sockfd;
-    conn_items[sockfd].recv_t.accept_callback = accept_cb;
-    std::cout<<sockfd<<std::endl;
+    return sockfd;
+}
+
+
+int main(){
+    //参数 size : 历史遗留问题，一开始需要确定 蜂巢盒子的大小 ，但是计算机里面完全可以实现一个链表的效果，无需一开始指定，所以
+    //我们只要大于0就行参数
+    epfd =  epoll_create(1);
+    int port_count = 10;
+    unsigned short start_port = 2048;
+    for(int i =0;i<port_count;++i){
+        int sockfd = init_server(start_port + i);
+        conn_items[sockfd].fd = sockfd;
+        conn_items[sockfd].recv_t.accept_callback = accept_cb;
+        set_event(sockfd,EPOLLIN,1);
+        std::cout<<sockfd<<std::endl;
+    }
+    gettimeofday(&tv_start,nullptr);
+
+
 #if 0
     char buffer[128];
     recv(newsockfd, buffer, sizeof(buffer), 0); // Receive data into buffer
@@ -332,10 +366,6 @@ int main(){
     //reactor epoll
     //为什么libevetn等网络库不适合多线程，很大程度上原因是底层实现上和这个类似，他的epfd,以及events列表是全局的，多个线程共享
     //当多个线程调用epoll_wait时，可能会出现惊群效应
-    epfd =  epoll_create(1);   
-    //参数 size : 历史遗留问题，一开始需要确定 蜂巢盒子的大小 ，但是计算机里面完全可以实现一个链表的效果，无需一开始指定，所以
-    //我们只要大于0就行参数
-    set_event(sockfd,EPOLLIN,1);
     epoll_event events[1024];
     //能不能把connfd在主循环中不用体现？我们只关注epollin/out?
     //能不能把select,poll,epoll代码做一个组件？
@@ -357,6 +387,47 @@ int main(){
         }
     }
 #endif
-    close(sockfd);
+    for(int i =0;i<port_count;++i){
+        int sockfd = start_port + i;
+        close(sockfd);
+    }
     return 0;
 }
+//目标：让服务器跑到百万连接 
+//一个socket 
+//: fd ->对应一个具体的tcp网络连接：tcp control block (TCB)
+//  tcb : sip ,dip ,sport,dport,protocl
+//  所以客户端ip,目标ip，目标端口，协议类型确认情况下，和客户端端口数有关系。
+//  端口是 unsigned short类型，占2个字节，范围0-65535,0-1023系统默认，不能随机分配
+
+//设置客户端的端口范围：
+///etc/sysctl.conf : net.ipv4.ip_local_port_range = 1024 65535,否则跑不了那么多端口，
+
+//设置客户端的fd最大值：
+///etc/sysctl.conf ：fs.file-max = 1048576 ,否则即使设置了ulimit -n 65536，
+//内核也不允许一个进程打开那么多文件描述符
+//接着执行sudo sysctl -p 使配置生效
+//这里第一次执行会报错： sysctl: 无法获取/proc/sys/et/ipv4/ip_local_port_range 的文件状态(stat): 没有那个文件或目录
+//解决方法： sudo modprobe ip_conntrack
+
+//同样需要在 ulimit  -a 里面把  open files  设置大一些，这个值就是一个进程能够打开的fd数量，
+//所以我们要一个进程建立六万多个连接，肯定要设置大一些，命令 ulimit -n  65536
+
+//设置服务端端口数：
+//这里我们开了10个端口，2048-2057
+//所以一个客户端最多可以建立 10 * 64512 = 645120 个连接
+
+//ps:之所以一开始3个客户端的情况下，建立1000个连接的时间会有突增，就是因为
+//有两个客户端在65999的时候停止了，导致消耗时间变成几乎之前的三倍，这是正常的，
+//设置了 fs.file-max = 1048576 后，这个问题就不存在了
+
+
+//===================问题！！
+// 1. 为什么客户端程序退出，服务端也跟着退出了？
+// 2. 直接手动设置成 1048576的数组，是不是有点太粗糙？
+// 3. 服务端跑到九十万的时候，直接崩溃退出了为什么？
+// 答案： 这个问题还是要到 /etc/sysctl.conf 里去修改
+// net.ipv4.tcp_mem = 262144 524288 1048576  这里的单位是页，4k，所以就是1gb,2gb,3gb,所以当超过3gb后，
+// 内核就直接杀掉进程了,所以要设置大一些，比如524288 1048576 2097152 这样就是2gb,4gb,8gb，一定能跑到百万连接
+// net.ipv4.tcp_rmem = 2048 2048 4096
+// net.ipv4.tcp_wmem = 2048 2048 4096
