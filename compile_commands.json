@@ -1,8 +1,104 @@
 [
   {
-    "directory": "/srv/samba/share/cpp",
-    "command": "/usr/bin/g++ -std=c++17 -I/usr/include/c++/13 -I/usr/include/x86_64-linux-gnu/c++/13 -I/usr/include/c++/13/backward -I/usr/lib/gcc/x86_64-linux-gnu/13/include -I/usr/local/include -I/usr/include/x86_64-linux-gnu -I/usr/include -c io.cpp",
-    "file": "io.cpp"
+    "arguments": [
+      "/usr/bin/g++",
+      "-g",
+      "-O0",
+      "-Wall",
+      "-Wextra",
+      "-std=c++17",
+      "-c",
+      "-o",
+      "/tmp/epoll.o",
+      "epoll.cpp"
+    ],
+    "directory": "/srv/samba/share/Linux-learn",
+    "file": "/srv/samba/share/Linux-learn/epoll.cpp",
+    "output": "/tmp/epoll.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-g",
+      "-O0",
+      "-Wall",
+      "-Wextra",
+      "-std=c++17",
+      "-c",
+      "-o",
+      "/tmp/http_server.o",
+      "http_server.cpp"
+    ],
+    "directory": "/srv/samba/share/Linux-learn",
+    "file": "/srv/samba/share/Linux-learn/http_server.cpp",
+    "output": "/tmp/http_server.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-g",
+      "-O0",
+      "-Wall",
+      "-Wextra",
+      "-std=c++17",
+      "-c",
+      "-o",
+      "/tmp/io.o",
+      "io.cpp"
+    ],
+    "directory": "/srv/samba/share/Linux-learn",
+    "file": "/srv/samba/share/Linux-learn/io.cpp",
+    "output": "/tmp/io.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-g",
+      "-O0",
+      "-Wall",
+      "-Wextra",
+      "-std=c++17",
+      "-c",
+      "-o",
+      "/tmp/reactor.o",
+      "reactor.cpp"
+    ],
+    "directory": "/srv/samba/share/Linux-learn",
+    "file": "/srv/samba/share/Linux-learn/reactor.cpp",
+    "output": "/tmp/reactor.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-g",
+      "-O0",
+      "-Wall",
+      "-Wextra",
+      "-std=c++17",
+      "-c",
+      "-o",
+      "/tmp/select_poll.o",
+      "select_poll.cpp"
+    ],
+    "directory": "/srv/samba/share/Linux-learn",
+    "file": "/srv/samba/share/Linux-learn/select_poll.cpp",
+    "output": "/tmp/select_poll.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-g",
+      "-O0",
+      "-Wall",
+      "-Wextra",
+      "-std=c++17",
+      "-c",
+      "-o",
+      "/tmp/tcp.o",
+      "tcp.cpp"
+    ],
+    "directory": "/srv/samba/share/Linux-learn",
+    "file": "/srv/samba/share/Linux-learn/tcp.cpp",
+    "output": "/tmp/tcp.o"
   }
 ]
-
